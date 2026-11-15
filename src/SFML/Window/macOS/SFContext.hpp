@@ -35,20 +35,16 @@
 ////////////////////////////////////////////////////////////
 #ifdef __OBJC__
 
-@class NSOpenGLContext;
-using NSOpenGLContextRef = NSOpenGLContext*;
-
-@class NSOpenGLView;
-using NSOpenGLViewRef = NSOpenGLView*;
+@class NSView;
+using NSViewRef = NSView*;
 
 @class NSWindow;
 using NSWindowRef = NSWindow*;
 
 #else // If C++
 
-using NSOpenGLContextRef = void*;
-using NSOpenGLViewRef    = void*;
-using NSWindowRef        = void*;
+using NSViewRef   = void*;
+using NSWindowRef = void*;
 
 #endif
 
@@ -86,14 +82,15 @@ protected:
 
 private:
     ////////////////////////////////////////////////////////////
-    void createContext(SFContext* shared, unsigned int bitsPerPixel, const ContextSettings& settings);
+    void createContext(SFContext* shared, const ContextSettings& settings, NSViewRef view);
 
     ////////////////////////////////////////////////////////////
     // Member data
     ////////////////////////////////////////////////////////////
-    NSOpenGLContextRef m_context{}; ///< OpenGL context.
-    NSOpenGLViewRef    m_view{};    ///< Only for offscreen context.
-    NSWindowRef        m_window{};  ///< Only for offscreen context.
+    void*       m_context{};  ///< MooGL context.
+    void*       m_renderer{}; ///< Its MGLRenderer, retained.
+    NSViewRef   m_view{};     ///< Only for offscreen context.
+    NSWindowRef m_window{};   ///< Only for offscreen context.
 };
 
 } // namespace sf::priv

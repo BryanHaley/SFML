@@ -512,7 +512,6 @@
 ////////////////////////////////////////////////////////
 - (void)closeWindow
 {
-    [self applyContext:nil];
     [m_window close];
     [m_window setDelegate:nil];
     [self setRequesterTo:nil];
@@ -585,10 +584,9 @@
 
 
 ////////////////////////////////////////////////////////
-- (void)applyContext:(NSOpenGLContext*)context
+- (NSView*)contextView
 {
-    [m_oglView setOpenGLContext:context];
-    [context setView:m_oglView];
+    return m_oglView;
 }
 
 

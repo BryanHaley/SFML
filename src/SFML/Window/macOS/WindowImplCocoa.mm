@@ -169,10 +169,9 @@ WindowImplCocoa::~WindowImplCocoa()
 
 
 ////////////////////////////////////////////////////////////
-void WindowImplCocoa::applyContext(NSOpenGLContextRef context) const
+NSViewRef WindowImplCocoa::getContextView() const
 {
-    const AutoreleasePool pool;
-    [m_delegate applyContext:context];
+    return [m_delegate contextView];
 }
 
 

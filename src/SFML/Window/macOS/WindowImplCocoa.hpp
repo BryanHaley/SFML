@@ -43,15 +43,15 @@
 #import <SFML/Window/macOS/WindowImplDelegateProtocol.h>
 using WindowImplDelegateRef = id<WindowImplDelegateProtocol, NSObject>;
 
-@class NSOpenGLContext;
-using NSOpenGLContextRef = NSOpenGLContext*;
+@class NSView;
+using NSViewRef = NSView*;
 
 #else // If C++
 
 using unichar = unsigned short; // See NSString.h
 
 using WindowImplDelegateRef = void*;
-using NSOpenGLContextRef    = void*;
+using NSViewRef             = void*;
 
 #endif
 
@@ -199,14 +199,12 @@ public:
     void textEntered(unichar charcode);
 
     ////////////////////////////////////////////////////////////
-    /// \brief Apply the context to the view
+    /// \brief Get the view a context draws into
     ///
     /// Called by the SFML context object to finalize its creation.
     ///
-    /// \param context The context to bind to the window
-    ///
     ////////////////////////////////////////////////////////////
-    void applyContext(NSOpenGLContextRef context) const;
+    NSViewRef getContextView() const;
 
     ////////////////////////////////////////////////////////////
     /// \brief Change the type of the current process

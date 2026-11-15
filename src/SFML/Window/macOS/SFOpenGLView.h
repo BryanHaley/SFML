@@ -39,7 +39,7 @@ class WindowImplCocoa;
 @class SFSilentResponder;
 
 ////////////////////////////////////////////////////////////
-/// \brief Specialized NSOpenGLView
+/// \brief Specialized NSView, drawn into by MooGL
 ///
 /// Handle event and send them back to the requester.
 ///
@@ -69,7 +69,7 @@ class WindowImplCocoa;
 ///
 ////////////////////////////////////////////////////////////
 // NOLINTBEGIN(readability-identifier-naming)
-@interface SFOpenGLView : NSOpenGLView
+@interface SFOpenGLView : NSView
 {
     sf::priv::WindowImplCocoa* m_requester;     ///< View's requester
     BOOL                       m_useKeyRepeat;  ///< Key repeat setting

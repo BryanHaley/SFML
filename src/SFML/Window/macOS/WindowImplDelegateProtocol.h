@@ -244,12 +244,10 @@ class WindowImplCocoa;
 - (void)processEvent;
 
 ////////////////////////////////////////////////////////////
-/// \brief Apply a given context to an OpenGL view
-///
-/// \param context OpenGL context to attach to the OpenGL view
+/// \brief The view an OpenGL context draws into
 ///
 ////////////////////////////////////////////////////////////
-- (void)applyContext:(NSOpenGLContext*)context;
+- (NSView*)contextView;
 
 @end
 

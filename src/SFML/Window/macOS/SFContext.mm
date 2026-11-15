@@ -32,10 +32,60 @@
 
 #include <SFML/System/Err.hpp>
 
+#import <Cocoa/Cocoa.h>
 #include <dlfcn.h>
 #include <ostream>
 
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+// MooGL: OpenGL 4.6 on Metal in place of Apple's NSOpenGL. Modified from
+// SFML's NSOpenGL version for MooGL.
+
+// From libmoogl. MGLRenderer.h needs Metal's headers, so the few calls used
+// here are declared instead.
+extern "C"
+{
+using GLMContext = struct GLMContextRec_t*;
+GLMContext createGLMContext(unsigned format, unsigned type, unsigned depthFormat, unsigned depthType, unsigned stencilFormat, unsigned stencilType);
+GLMContext createGLMContextProfile(unsigned format,
+                                   unsigned type,
+                                   unsigned depthFormat,
+                                   unsigned depthType,
+                                   unsigned stencilFormat,
+                                   unsigned stencilType,
+                                   GLMContext share,
+                                   unsigned profile);
+void       destroyGLMContext(GLMContext ctx);
+GLMContext MGLgetCurrentContext();
+void       MGLsetCurrentContext(GLMContext ctx);
+void       MGLswapBuffers(GLMContext ctx);
+void       MGLsetSwapInterval(GLMContext ctx, int interval);
+void       MGLsetContextFlags(GLMContext ctx, unsigned flags);
+void*      CppCreateMGLRendererHeadless(void* ctx);
+}
+
+@interface MGLRenderer : NSObject
+- (void)createMGLRendererAndBindToContext:(GLMContext)glmCtx view:(NSView*)view;
+@end
+
+namespace
+{
+constexpr unsigned mglBgra             = 0x80E1;
+constexpr unsigned mglUnsignedInt8888  = 0x8367;
+constexpr unsigned mglDepthComponent   = 0x1902;
+constexpr unsigned mglFloat            = 0x1406;
+constexpr unsigned mglStencilIndex8    = 0x8D48;
+constexpr unsigned mglUnsignedByte     = 0x1401;
+constexpr unsigned mglCoreProfile      = 0x1;
+constexpr unsigned mglCompatProfile    = 0x2;
+constexpr unsigned mglContextFlagDebug = 0x2;
+
+// MooGL has to have a context current for the GL entry points to land
+// anywhere, so this stands in when SFML has none
+GLMContext placeholderContext()
+{
+    static GLMContext placeholder = createGLMContext(0, 0, 0, 0, 0, 0);
+    return placeholder;
+}
+} // namespace
 
 namespace sf::priv
 {
@@ -44,23 +94,16 @@ namespace sf::priv
 SFContext::SFContext(SFContext* shared)
 {
     const AutoreleasePool pool;
-    // Create the context
-    createContext(shared,
-                  VideoMode::getDesktopMode().bitsPerPixel,
-                  ContextSettings{0 /* depthBits */, 0 /* stencilBits */, 0 /* antiAliasingLevel */});
+    createContext(shared, ContextSettings{0 /* depthBits */, 0 /* stencilBits */, 0 /* antiAliasingLevel */}, nil);
 }
 
 
 ////////////////////////////////////////////////////////////
-SFContext::SFContext(SFContext* shared, const ContextSettings& settings, const WindowImpl& owner, unsigned int bitsPerPixel)
+SFContext::SFContext(SFContext* shared, const ContextSettings& settings, const WindowImpl& owner, unsigned int /* bitsPerPixel */)
 {
     const AutoreleasePool pool;
-    // Create the context.
-    createContext(shared, bitsPerPixel, settings);
-
-    // Apply context.
-    const auto& ownerCocoa = static_cast<const WindowImplCocoa&>(owner);
-    ownerCocoa.applyContext(m_context);
+    const auto&           ownerCocoa = static_cast<const WindowImplCocoa&>(owner);
+    createContext(shared, settings, ownerCocoa.getContextView());
 }
 
 
@@ -71,19 +114,16 @@ SFContext::SFContext(SFContext* shared, const ContextSettings& settings, Vector2
     // Ensure the process is setup in order to create a valid window.
     WindowImplCocoa::setUpProcess();
 
-    // Create the context.
-    createContext(shared, VideoMode::getDesktopMode().bitsPerPixel, settings);
-
-    // Create a dummy window/view pair (hidden) and assign it our context.
+    // A hidden window and view to draw into.
     m_window = [[NSWindow alloc]
         initWithContentRect:NSMakeRect(0, 0, size.x, size.y)
-                  styleMask:NSBorderlessWindowMask
+                  styleMask:NSWindowStyleMaskBorderless
                     backing:NSBackingStoreBuffered
                       defer:NO]; // Don't defer it!
-    m_view   = [[NSOpenGLView alloc] initWithFrame:NSMakeRect(0, 0, size.x, size.y)];
+    m_view   = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, size.x, size.y)];
     [m_window setContentView:m_view];
-    [m_view setOpenGLContext:m_context];
-    [m_context setView:m_view];
+
+    createContext(shared, settings, m_view);
 }
 
 
@@ -94,12 +134,15 @@ SFContext::~SFContext()
     // Notify unshared OpenGL resources of context destruction
     cleanupUnsharedResources();
 
-    [m_context clearDrawable];
+    if (m_context != nullptr)
+    {
+        if (MGLgetCurrentContext() == m_context)
+            MGLsetCurrentContext(placeholderContext());
+        destroyGLMContext(static_cast<GLMContext>(m_context));
+    }
 
-    if (m_context == [NSOpenGLContext currentContext])
-        [NSOpenGLContext clearCurrentContext];
-
-    [m_context release];
+    if (m_renderer != nullptr)
+        CFRelease(m_renderer);
 
     [m_view release];   // Might be nil but we don't care.
     [m_window release]; // Idem.
@@ -109,28 +152,29 @@ SFContext::~SFContext()
 ////////////////////////////////////////////////////////////
 GlFunctionPointer SFContext::getFunction(const char* name)
 {
-    const AutoreleasePool pool;
-    static void*          image = nullptr;
+    static void* image = nullptr;
 
+    // always the copy of libmoogl SFML is linked against; a second copy would
+    // have its own current context
     if (!image)
-        image = dlopen("/System/Library/Frameworks/OpenGL.framework/Versions/Current/OpenGL", RTLD_LAZY);
+    {
+        Dl_info info;
+        if (dladdr(reinterpret_cast<const void*>(createGLMContext), &info) && info.dli_fname)
+            image = dlopen(info.dli_fname, RTLD_LAZY | RTLD_LOCAL);
+    }
 
-    return image ? reinterpret_cast<GlFunctionPointer>(reinterpret_cast<intptr_t>(dlsym(image, name))) : nil;
+    return image ? reinterpret_cast<GlFunctionPointer>(reinterpret_cast<intptr_t>(dlsym(image, name))) : nullptr;
 }
 
 
 ////////////////////////////////////////////////////////////
 bool SFContext::makeCurrent(bool current)
 {
-    const AutoreleasePool pool;
-    if (current)
-    {
-        [m_context makeCurrentContext];
-        return m_context == [NSOpenGLContext currentContext]; // Should be true.
-    }
+    if (m_context == nullptr)
+        return false;
 
-    [NSOpenGLContext clearCurrentContext];
-    return m_context != [NSOpenGLContext currentContext]; // Should be true.
+    MGLsetCurrentContext(current ? static_cast<GLMContext>(m_context) : placeholderContext());
+    return true;
 }
 
 
@@ -138,151 +182,65 @@ bool SFContext::makeCurrent(bool current)
 void SFContext::display()
 {
     const AutoreleasePool pool;
-    [m_context flushBuffer];
+    MGLswapBuffers(static_cast<GLMContext>(m_context));
 }
 
 
 ////////////////////////////////////////////////////////////
 void SFContext::setVerticalSyncEnabled(bool enabled)
 {
-    const AutoreleasePool pool;
-    const GLint           swapInterval = enabled;
-
-    [m_context setValues:&swapInterval forParameter:NSOpenGLCPSwapInterval];
+    MGLsetSwapInterval(static_cast<GLMContext>(m_context), enabled ? 1 : 0);
 }
 
 
 ////////////////////////////////////////////////////////////
-void SFContext::createContext(SFContext* shared, unsigned int bitsPerPixel, const ContextSettings& settings)
+void SFContext::createContext(SFContext* shared, const ContextSettings& settings, NSViewRef view)
 {
     const AutoreleasePool pool;
     // Save the settings. (OpenGL version is updated elsewhere.)
     m_settings = settings;
 
-    // Choose the attributes of OGL context.
-    std::vector<NSOpenGLPixelFormatAttribute> attrs;
-    attrs.reserve(20); // max attributes (estimation).
+    // Every version up to 4.6 gets 4.6; a core context only when asked for one
+    const bool core = m_settings.majorVersion >= 3 && (m_settings.attributeFlags & ContextSettings::Core);
+    const bool depth   = m_settings.depthBits > 0;
+    const bool stencil = m_settings.stencilBits > 0;
 
-    // These casts are safe. C++ is much more strict than Obj-C.
+    // MooGL's default framebuffer has no multisampling
+    m_settings.antiAliasingLevel = 0;
+    m_settings.sRgbCapable       = false;
 
-    attrs.push_back(NSOpenGLPFAClosestPolicy);
-    attrs.push_back(NSOpenGLPFADoubleBuffer);
-
-    if (bitsPerPixel > 24)
+    m_context = createGLMContextProfile(mglBgra,
+                                        mglUnsignedInt8888,
+                                        depth ? mglDepthComponent : 0,
+                                        depth ? mglFloat : 0,
+                                        stencil ? mglStencilIndex8 : 0,
+                                        stencil ? mglUnsignedByte : 0,
+                                        shared ? static_cast<GLMContext>(shared->m_context) : nullptr,
+                                        core ? mglCoreProfile : mglCompatProfile);
+    if (m_context == nullptr)
     {
-        attrs.push_back(NSOpenGLPFAAlphaSize);
-        attrs.push_back(static_cast<NSOpenGLPixelFormatAttribute>(8));
-    }
-
-    attrs.push_back(NSOpenGLPFADepthSize);
-    attrs.push_back(static_cast<NSOpenGLPixelFormatAttribute>(m_settings.depthBits));
-
-    attrs.push_back(NSOpenGLPFAStencilSize);
-    attrs.push_back(static_cast<NSOpenGLPixelFormatAttribute>(m_settings.stencilBits));
-
-    if (m_settings.antiAliasingLevel > 0)
-    {
-        /*
-         * Antialiasing techniques are described in the
-         * "OpenGL Programming Guide for Mac OS X" document.
-         *
-         * According to this document, the specification currently allows
-         * only one multisample buffer.
-         *
-         * The document also states that software renderers should be avoided
-         * because antialisaing techniques are very slow with them.
-         */
-
-        // Prefer multisampling over supersampling
-        attrs.push_back(NSOpenGLPFAMultisample);
-
-        // Only one buffer is currently available
-        attrs.push_back(NSOpenGLPFASampleBuffers);
-        attrs.push_back(static_cast<NSOpenGLPixelFormatAttribute>(1));
-
-        // Antialiasing level
-        attrs.push_back(NSOpenGLPFASamples);
-        attrs.push_back(static_cast<NSOpenGLPixelFormatAttribute>(m_settings.antiAliasingLevel));
-    }
-
-    // Support for OpenGL 3.2 on Mac OS X Lion and later:
-    // The SFML Graphics module uses some OpenGL features that are deprecated in
-    // OpenGL 3.0 and that are no longer available in 3.1 and 3.2+ with a core context.
-    // Therefore the Graphics module won't work as expected.
-
-    // 1.x/2.x are mapped to 2.1 since Apple only support that legacy version.
-    // >=3.0 are mapped to a 3.2 core profile.
-    if (m_settings.majorVersion < 3)
-    {
-        m_settings.attributeFlags &= ~static_cast<unsigned int>(ContextSettings::Core);
-        m_settings.majorVersion = 2;
-        m_settings.minorVersion = 1;
-        attrs.push_back(NSOpenGLPFAOpenGLProfile);
-        attrs.push_back(NSOpenGLProfileVersionLegacy);
-    }
-    else
-    {
-        if (!(m_settings.attributeFlags & ContextSettings::Core))
-        {
-            err() << "Warning. Compatibility profile not supported on this platform." << std::endl;
-            m_settings.attributeFlags |= ContextSettings::Core;
-        }
-        m_settings.majorVersion = 3;
-        m_settings.minorVersion = 2;
-        attrs.push_back(NSOpenGLPFAOpenGLProfile);
-        attrs.push_back(NSOpenGLProfileVersion3_2Core);
-    }
-
-    if (m_settings.attributeFlags & ContextSettings::Debug)
-    {
-        err() << "Warning. OpenGL debugging not supported on this platform." << std::endl;
-        m_settings.attributeFlags &= ~static_cast<unsigned int>(ContextSettings::Debug);
-    }
-
-    attrs.push_back(static_cast<NSOpenGLPixelFormatAttribute>(0)); // end of array
-
-    // All macOS pixel formats are sRGB capable
-    m_settings.sRgbCapable = true;
-
-    // Create the pixel format.
-    NSOpenGLPixelFormat* const pixFmt = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs.data()];
-
-    if (pixFmt == nil)
-    {
-        err() << "Error. Unable to find a suitable pixel format." << std::endl;
+        err() << "Error. Unable to create the context." << std::endl;
         return;
     }
 
-    // Use the shared context if one is given.
-    NSOpenGLContext* const sharedContext = shared != nullptr ? shared->m_context : nil;
+    if (m_settings.attributeFlags & ContextSettings::Debug)
+        MGLsetContextFlags(static_cast<GLMContext>(m_context), mglContextFlagDebug);
 
-    if (sharedContext != nil)
+    const GLMContext was = MGLgetCurrentContext();
+    MGLsetCurrentContext(static_cast<GLMContext>(m_context));
+    if (view != nil)
     {
-        [NSOpenGLContext clearCurrentContext];
-
-        if (sharedContext == [NSOpenGLContext currentContext])
-        {
-            err() << "Failed to deactivate shared context before sharing" << std::endl;
-            return;
-        }
+        MGLRenderer* const renderer = [[MGLRenderer alloc] init];
+        [renderer createMGLRendererAndBindToContext:static_cast<GLMContext>(m_context) view:view];
+        m_renderer = const_cast<void*>(CFBridgingRetain(renderer));
+        [renderer release];
     }
-
-    // Create the context.
-    m_context = [[NSOpenGLContext alloc] initWithFormat:pixFmt shareContext:sharedContext];
-
-    if (m_context == nil)
+    else
     {
-        err() << "Error. Unable to create the context. Retrying without shared context." << std::endl;
-        m_context = [[NSOpenGLContext alloc] initWithFormat:pixFmt shareContext:nil];
-
-        if (m_context == nil)
-            err() << "Error. Unable to create the context." << std::endl;
-        else
-            err() << "Warning. New context created without shared context." << std::endl;
+        m_renderer = CppCreateMGLRendererHeadless(m_context);
+        CFRetain(m_renderer);
     }
-
-    // Free up.
-    [pixFmt release];
+    MGLsetCurrentContext(was ? was : placeholderContext());
 }
 
 } // namespace sf::priv
