@@ -51,15 +51,15 @@
 #import <SFML/Window/OSX/WindowImplDelegateProtocol.h>
 typedef id<WindowImplDelegateProtocol,NSObject> WindowImplDelegateRef;
 
-@class NSOpenGLContext;
-typedef NSOpenGLContext* NSOpenGLContextRef;
+@class NSView;
+typedef NSView* NSViewRef;
 
 #else // If C++
 
 typedef unsigned short unichar; // See NSString.h
 
 typedef void* WindowImplDelegateRef;
-typedef void* NSOpenGLContextRef;
+typedef void* NSViewRef;
 
 #endif
 
@@ -229,14 +229,12 @@ public:
     void textEntered(unichar charcode);
 
     ////////////////////////////////////////////////////////////
-    /// \brief Apply the context to the view
+    /// \brief Get the view a context draws into
     ///
     /// Called by the SFML context object to finalize its creation.
     ///
-    /// \param context The context to bind to the window
-    ///
     ////////////////////////////////////////////////////////////
-    void applyContext(NSOpenGLContextRef context) const;
+    NSViewRef getContextView() const;
 
     ////////////////////////////////////////////////////////////
     /// \brief Change the type of the current process

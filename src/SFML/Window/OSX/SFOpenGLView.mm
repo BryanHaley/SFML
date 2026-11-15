@@ -148,17 +148,6 @@
 
 
 ////////////////////////////////////////////////////////
--(void)update
-{
-    // In order to prevent an infinite recursion when the window/view is
-    // resized to zero-height/width, we ignore update event when resizing.
-    if (![self inLiveResize]) {
-        [super update];
-    }
-}
-
-
-////////////////////////////////////////////////////////
 -(void)finishInit
 {
     // Register for window focus events
@@ -269,9 +258,6 @@
     // Update mouse internal state.
     [self updateMouseState];
     [self updateCursorGrabbed];
-
-    // Update the OGL view to fit the new size.
-    [self update];
 
     // Send an event
     if (m_requester == 0)

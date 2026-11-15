@@ -36,19 +36,15 @@
 ////////////////////////////////////////////////////////////
 #ifdef __OBJC__
 
-@class NSOpenGLContext;
-typedef NSOpenGLContext* NSOpenGLContextRef;
-
-@class NSOpenGLView;
-typedef NSOpenGLView* NSOpenGLViewRef;
+@class NSView;
+typedef NSView* NSViewRef;
 
 @class NSWindow;
 typedef NSWindow* NSWindowRef;
 
 #else // If C++
 
-typedef void* NSOpenGLContextRef;
-typedef void* NSOpenGLViewRef;
+typedef void* NSViewRef;
 typedef void* NSWindowRef;
 
 #endif
@@ -149,20 +145,21 @@ private:
     /// \brief Create the context
     /// \note Must only be called from Ctor.
     ///
-    /// \param shared       Context to share the new one with (can be NULL)
-    /// \param bitsPerPixel bpp
-    /// \param settings     Creation parameters
+    /// \param shared   Context to share the new one with (can be NULL)
+    /// \param settings Creation parameters
+    /// \param view     View to draw into, or nil for none
     ///
     ////////////////////////////////////////////////////////////
     void createContext(SFContext* shared,
-                       unsigned int bitsPerPixel,
-                       const ContextSettings& settings);
+                       const ContextSettings& settings,
+                       NSViewRef view);
 
     ////////////////////////////////////////////////////////////
     // Member data
     ////////////////////////////////////////////////////////////
-    NSOpenGLContextRef    m_context;       ///< OpenGL context.
-    NSOpenGLViewRef       m_view;          ///< Only for offscreen context.
+    void*                 m_context;       ///< MooGL context.
+    void*                 m_renderer;      ///< Its MGLRenderer, retained.
+    NSViewRef             m_view;          ///< Only for offscreen context.
     NSWindowRef           m_window;        ///< Only for offscreen context.
 };
 
